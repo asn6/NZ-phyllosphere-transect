@@ -1,0 +1,264 @@
+---
+title: "alpha_diversity"
+author: "Anya"
+date: "2024-08-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load packages
+```{r}
+#Setting up the workspace 
+
+#load packages
+library(ggplot2)
+library(permute)
+library(lattice)
+library(vegan)
+library(dplyr)
+library(magrittr)
+library(scales)
+library(grid)
+library(reshape2)
+library(phyloseq)
+library(randomForest)
+library(knitr)
+library(ggplot2)
+library(tibble)
+library(tidyverse)
+library(vegan)
+library(RColorBrewer)
+library(readr)
+library(ggthemes)
+library(ggpubr)
+library(cowplot)
+
+Rp_physeq <- readRDS("Rp_physeq.rds") #read in phyloseq object 
+
+
+#subset leaf samples from soil
+L_Rp_physeq <- subset_samples(Rp_physeq, Type %in% c("Leaf "))
+data <- otu_table(L_Rp_physeq) 
+data = data[ rowSums(data)!=0, ] 
+otu_table(L_Rp_physeq) <- otu_table(data, taxa_are_rows = TRUE) 
+
+######################################################
+####Richness & Shannon - phyllosphere host species####
+######################################################
+
+otu <- otu_table(L_Rp_physeq)
+min_lib <- min(sample_sums(otu))
+nsamp = nsamples(otu)
+trials = 100
+
+richness <- matrix(nrow = nsamp, ncol = trials)
+row.names(richness) <- sample_names(otu)
+
+shannon <- matrix(nrow = nsamp, ncol = trials)
+row.names(shannon) <- sample_names(otu)
+
+set.seed(3)
+
+for (i in 1:100) {
+  # Subsample
+  r <- rarefy_even_depth(otu, sample.size = min_lib, verbose = FALSE, replace = TRUE)
+  
+  # Calculate richness
+  rich <- as.numeric(as.matrix(estimate_richness(r, measures = "Observed")))
+  richness[ ,i] <- rich
+  
+  # Calculate Shannon
+  shann <- as.numeric(as.matrix(estimate_richness(r, measures = "Shannon")))
+  shannon[ ,i] <- shann
+}
+
+#Takes 100 x subsampled a diveristy matrix, calculates mean and returns tidy df
+alpha_tidy <- function(x){
+  Sample_ID <- row.names(x)
+  mean <- apply(x, 1, mean)
+  sd <- apply(x, 1, sd)
+  df <- data.frame(Sample_ID, mean, sd)
+ }
+
+#Create two dataframes for richness and shannon
+df_rich <- alpha_tidy(richness)
+df_shann <- alpha_tidy(shannon)
+
+#merge shannon dataframe with metadata
+meta <- data.frame(sample_data(L_Rp_physeq))
+df_shann <- merge(df_shann, meta, by = "Sample_ID") 
+df_shann$group = factor(df_shann$Host_species,
+                      labels = c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) 
+
+#Testing normality
+hist(df_shann$mean, main="Shannon", xlab="", breaks=10)
+shapiro.test(df_shann$mean) #pvalue = 0.05675, so can assume normal (just!)
+
+#Testing significant across groups
+t <- aov(mean ~ Host_species, data=df_shann) 
+summary(t) #0.122 so not significantly different
+TukeyHSD(t)
+
+#plot
+mycols <- c("#DDAA33","#44AA99" ,"#004488", "#bb5566")
+df_shann$Host_species <- factor(df_shann$Host_species,
+       c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) #this reorders
+groups <- df_shann$Host_species
+
+shann_host <- ggplot(data=df_shann, aes(x=Host_species,y=mean, fill=groups)) +
+  geom_boxplot(outlier.shape=NA) + 
+   scale_x_discrete(labels=c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")) +
+  scale_fill_manual(name = "Sample type", values = mycols) +
+   geom_jitter(size = 2, width=0.2,height=NULL) + 
+   ylab("Shannon") + 
+  xlab("Plant species") + 
+  theme_classic(base_size = 12) + 
+  theme(legend.position="none") + 
+    annotate(geom="text", x=4, y=5.2, label="p > 0.05 ",
+              color="black"); shann_host
+
+#merge richness dataframe with metadata
+meta <- data.frame(sample_data(L_Rp_physeq))
+df_rich <- merge(df_rich, meta, by = "Sample_ID") 
+df_rich$group = factor(df_rich$Host_species,
+                      labels = c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) 
+tapply(df_rich$mean, df_rich$Host_species, mean) 
+
+#Testing normality
+hist(df_rich$mean, main="Richness", xlab="", breaks=10)
+shapiro.test(df_rich$mean) #pvalue = 0.07565, so can assume normal
+
+#Testing significant across groups
+t <- aov(mean ~ Host_species, data=df_rich) #richness is not significant.
+summary(t) #p=0.07565
+TukeyHSD(t)
+
+#plot for paper
+mycols <- c("#DDAA33","#44AA99" ,"#004488", "#bb5566")
+df_rich$Host_species <- factor(df_rich$Host_species,
+       c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) #this reorders
+groups <- df_rich$Host_species
+
+rich_host <- ggplot(data=df_rich, aes(x=Host_species,y=mean, fill=groups)) +
+  geom_boxplot(outlier.shape=NA) + 
+   scale_x_discrete(labels=c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")) +
+  scale_fill_manual(name = "Sample type", values = mycols) +
+   geom_jitter(size = 2, width=0.2,height=NULL) + 
+   ylab("Richness") + 
+  xlab("Plant species") + 
+  theme_classic(base_size = 12) + 
+  theme(legend.position="none") + 
+    annotate(geom="text", x=4, y=220, label="p > 0.05",
+              color="black"); rich_host
+
+####plotting####
+alpha_host <- plot_grid(rich_host, shann_host,
+        
+          labels = c('A', 'B'), 
+          label_size = 12, 
+          ncol=2); alpha_host
+
+ggsave(filename = "SFig6AB.png", plot = alpha_host, width = 16, height = 8, units = c("cm"))
+
+########################################
+####Richness & Shannon - sample type####
+########################################
+
+otu <- otu_table(Rp_physeq)
+min_lib <- min(sample_sums(otu))
+nsamp = nsamples(otu)
+trials = 100
+
+richness <- matrix(nrow = nsamp, ncol = trials)
+row.names(richness) <- sample_names(otu)
+
+shannon <- matrix(nrow = nsamp, ncol = trials)
+row.names(shannon) <- sample_names(otu)
+
+set.seed(3)
+for (i in 1:100) {
+  # Subsample
+  r <- rarefy_even_depth(otu, sample.size = min_lib, verbose = FALSE, replace = TRUE)
+  
+  # Calculate richness
+  rich <- as.numeric(as.matrix(estimate_richness(r, measures = "Observed")))
+  richness[ ,i] <- rich
+  
+  # Calculate Shannon
+  shann <- as.numeric(as.matrix(estimate_richness(r, measures = "Shannon")))
+  shannon[ ,i] <- shann
+}
+
+#Creating two dateframes for richness and shannon
+df_rich <- alpha_tidy(richness)
+df_shann <- alpha_tidy(shannon)
+
+#Merge richness dataframe with metadata
+meta <- data.frame(sample_data(Rp_physeq))
+df_rich <- merge(df_rich, meta, by = "Sample_ID") 
+df_rich$group = factor(df_rich$Type,
+                      labels = c("Leaf", "Soil")) #creating a factor
+
+#Testing normality
+hist(df_rich$mean, main="Observed Richness", xlab="", breaks=10)
+shapiro.test(df_rich$mean) #pvalue = 0.02432, so can assume not normal
+
+#Testing significant across groups
+t <- wilcox.test(mean ~ Type, data=df_rich); t #p-value = 0.04024, significant.
+
+#Plot
+mycols_type <- c("darkgreen","brown")
+groups <- df_rich$Type
+
+rich_type <- ggplot(data=df_rich, aes(x=Type,y=mean, fill=groups)) +
+  geom_boxplot(outlier.shape=NA) + 
+  scale_fill_manual(name = "Sample type", values = mycols_type) +
+   geom_jitter(size = 2, width=0.2,height=NULL) + 
+   ylab("Richness") + 
+  xlab("Type") + 
+  theme_classic(base_size = 12) + 
+  theme(legend.position="none") + 
+  annotate(geom="text", label= "p = 0.04", 
+           x = 2.2, y = 150, color="black"); rich_type
+
+#Merge shannon dataframe with metadata
+meta <- data.frame(sample_data(Rp_physeq))
+df_shann <- merge(df_shann, meta, by = "Sample_ID") 
+df_shann$group = factor(df_shann$Type,
+                      labels = c("Leaf", "Soil")) #creating a factor
+
+#Testing normality
+hist(df_shann$mean, main="Shannon", xlab="", breaks=10)
+shapiro.test(df_shann$mean) #pvalue = 9.683e-05, so can assume not normal
+
+#Testing significant across groups
+t <- wilcox.test(mean ~ Type, data=df_shann);t #p-value = 0.1107 not significant
+
+#plot for paper
+mycols_type <- c("darkgreen","brown")
+groups <- df_rich$Type
+
+shann_type <- ggplot(data=df_shann, aes(x=Type,y=mean, fill=groups)) +
+  geom_boxplot(outlier.shape=NA) + 
+  scale_fill_manual(name = "Sample type", values = mycols_type) +
+   geom_jitter(size = 2, width=0.2,height=NULL) + 
+   ylab("Shannon") + 
+  xlab("Type") + 
+  theme_classic(base_size = 12) + 
+  theme(legend.position="none") + 
+  annotate(geom="text", label= "p > 0.05", 
+           x = 2.2, y = 4.8, color="black"); shann_type
+
+####plotting####
+alpha_type <- plot_grid(rich_type, shann_type,
+          labels = c('C', 'D'), 
+          label_size = 12, 
+          ncol=2) ;alpha_type
+
+ggsave(filename =  "SFig6CD.png", plot = alpha_type, width = 16, height = 8, units = c("cm"))
+
+```
+

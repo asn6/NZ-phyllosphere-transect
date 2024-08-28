@@ -1,0 +1,513 @@
+---
+title: "indicator_species"
+author: "Anya"
+date: "2024-08-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#Setting up the workspace 
+
+#laod packages
+library(ggplot2)
+library(permute)
+library(lattice)
+library(vegan)
+library(dplyr)
+library(magrittr)
+library(scales)
+library(grid)
+library(reshape2)
+library(phyloseq)
+library(randomForest)
+library(knitr)
+library(ggplot2)
+library(tibble)
+library(tidyverse)
+library(vegan)
+library(RColorBrewer)
+library(readr)
+library(ggpubr)
+library(ggthemes)
+library(rstatix)
+
+physeq <- readRDS("Rp_physeq.rds")
+
+#transform raw data to relative abundance 
+Rp_physeq_ab <- Rp_physeq %>% transform_sample_counts(function(x) {x/sum(x)} )
+
+#Subset  leaf samples from soil and remove rows(ASVs) with zero sum
+L_Rp_physeq_ab <- subset_samples(Rp_physeq_ab, Type %in% c("Leaf "))
+data <- otu_table(L_Rp_physeq_ab)
+data = data[ rowSums(data)!=0, ] 
+otu_table(L_Rp_physeq_ab) <- otu_table(data, taxa_are_rows = TRUE) 
+
+library(indicspecies)
+#otu table based dataframe of samples in rows and asvs in columns 
+data <- t(otu_table(L_Rp_physeq_ab))
+
+groups = c(rep("Manuka", 17), rep("Tawiniwini", 3), rep("Toatoa", 1), rep("Kanuka", 1), rep("Tawiniwini", 2),  rep("Toatoa", 1), rep("Kanuka", 1),rep("Toatoa", 1), rep("Kanuka", 1),rep("Toatoa", 1), rep("Kanuka", 1),rep("Toatoa", 1), rep("Kanuka", 1),rep("Toatoa", 1), rep("Kanuka", 1), rep("Tawiniwini", 1))            
+
+indvalori = multipatt(data, groups, duleg = TRUE,
+                   control = how(nperm=999)) 
+summary(indvalori) #485 taxa 
+
+sig_ind <- filter(indvalori$sign, p.value <= 0.05)
+Man_sig <- filter(sig_ind, s.Manuka > 0 )
+Kan_sig <- filter(sig_ind, s.Kanuka > 0 )
+Taw_sig <- filter(sig_ind, s.Tawiniwini > 0 )
+Toa_sig <- filter(sig_ind, s.Toatoa > 0 )
+
+Man_ind_asvs <- row.names(Man_sig)
+Kan_ind_asvs <- row.names(Kan_sig)
+Taw_ind_asvs <- row.names(Taw_sig)
+Toa_ind_asvs <- row.names(Toa_sig)
+
+#settings
+physeq= L_Rp_physeq_ab
+
+#creating individual phyloseq objects with each host species indicator taxa
+#Manuka
+ind_otu <- subset(otu_table(physeq), rownames(otu_table(physeq)) %in% Man_ind_asvs)
+Manuka_Ind_physeq <- merge_phyloseq(ind_otu, tax_table(physeq), sample_data(physeq))
+
+Manuka_ASVS_indic <- read.table("ManIndASVs_otutab_manmerged.txt") #manually averaged the asv relative abundance per manuka tree so n = non-manuka trees
+Manuka_Ind_physeq <- L_Rp_physeq_ab
+otu_table(Manuka_Ind_physeq) <- otu_table(Manuka_ASVS_indic, taxa_are_rows = TRUE)
+
+# mean(colSums(otu_table(Manuka_Ind_physeq)))
+# mean.sd(colSums(otu_table(Manuka_Ind_physeq)))
+
+#Kanuka
+ind_otu <- subset(otu_table(physeq), rownames(otu_table(physeq)) %in% Kan_ind_asvs)
+Kanuka_Ind_physeq <- merge_phyloseq(ind_otu, tax_table(physeq), sample_data(physeq))
+
+# mean(colSums(otu_table(Kanuka_Ind_physeq)))
+# mean.sd(colSums(otu_table(Kanuka_Ind_physeq)))
+
+#Tawiniwini
+ind_otu <- subset(otu_table(physeq), rownames(otu_table(physeq)) %in% Taw_ind_asvs)
+Tawiniwini_Ind_physeq <- merge_phyloseq(ind_otu, tax_table(physeq), sample_data(physeq))
+
+# mean(colSums(otu_table(Tawiniwini_Ind_physeq)))
+# mean.sd(colSums(otu_table(Tawiniwini_Ind_physeq)))
+
+#Toatoa
+ind_otu <- subset(otu_table(physeq), rownames(otu_table(physeq)) %in% Toa_ind_asvs)
+Toatoa_Ind_physeq <- merge_phyloseq(ind_otu, tax_table(physeq), sample_data(physeq))
+
+# mean(colSums(otu_table(Toatoa_Ind_physeq)))
+# mean.sd(colSums(otu_table(Toatoa_Ind_physeq)))
+
+
+###taxonomy plots###
+#Fig6a
+#manuka
+data <- Manuka_Ind_physeq %>%                                         
+  tax_glom(taxrank = "Genus") %>%                     
+  psmelt() %>%                   
+  arrange(-Abundance) 
+  
+data$Host_species <- factor(data$Host_species, levels=c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) #this establishes the x axis order
+
+host.labs <- c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")
+names(host.labs) <- c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")
+
+M_i <- ggplot(data, aes(x=Transect_point , y = Abundance, 
+                        fill = Genus)) +
+  
+  geom_bar(stat = "identity", width = 0.8, show.legend = TRUE) +
+  
+  xlab("") +
+  ylab("Relative Abundance \n ") +
+  scale_x_discrete(breaks = unique) +
+  scale_y_continuous(limits = c(0,0.52), expand = c(0,0)) + 
+  theme_classic() +
+  theme(axis.text.x=element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size=10, face = "italic"), legend.title = element_text(size = 10)) +
+  facet_wrap(~ Host_species, ncol =4, scales = 'free', 
+             labeller = labeller(Host_species = host.labs)) + 
+  scale_fill_manual(values = c("Acidiphilium" = "#8DD3C7",
+                                "Aurantisolimonas" = "#FFFFB3",
+                                "Bryocella" = "#BEBADA",
+                                "Edaphobacter" =  "#FB8072",
+                                "Granulicella" = "#80B1D3",
+                                "LD29" = "#FDB462",
+                                "Methylocella" = "#B3DE69",
+                                "PMMR1" =   "#FCCDE5",
+                                "Sphingomonas" = "#D9D9D9",
+                                "Terriglobus" =  "#BC80BD",
+                                "Unknown" = "#CCEBC5",
+                                "1174-901-12" = "#FFED6F"),
+                    drop = FALSE) ; M_i
+
+       
+##customising facet grid colour per species
+#devtools::install_github("teunbrand/ggh4x")
+library(ggh4x)
+
+M_i <- ggplot(data, aes(x=Transect_point, y = Abundance, fill = Genus)) +
+  
+  geom_bar(stat = "identity", width = 0.8, show.legend = TRUE) +
+  
+  xlab("") +
+  ylab("Relative Abundance \n ") +
+  scale_x_discrete(breaks = unique) +
+  scale_y_continuous(limits = c(0,0.52), expand = c(0,0)) + 
+  theme_classic() +
+  #theme(axis.text.x=element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size=10, face = "italic"), legend.title = element_text(size = 10)) +
+  
+  facet_wrap2(ncol =4,
+    Host_species ~ ., scales = "free", axes = TRUE,
+    labeller = labeller(Host_species = host.labs),
+    strip = strip_themed(
+      background_x = list(element_rect(fill="lightgrey"),
+                          element_rect(fill="white"),
+                          element_rect(fill="white"),
+                          element_rect(fill="white"))
+                                       
+    )) +
+    scale_fill_manual(values = c("Acidiphilium" = "#8DD3C7",
+                                "Aurantisolimonas" = "#FFFFB3",
+                                "Bryocella" = "#BEBADA",
+                                "Edaphobacter" =  "#FB8072",
+                                "Granulicella" = "#80B1D3",
+                                "LD29" = "#FDB462",
+                                "Methylocella" = "#B3DE69",
+                                "PMMR1" =   "#FCCDE5",
+                                "Sphingomonas" = "#D9D9D9",
+                                "Terriglobus" =  "#BC80BD",
+                                "Unknown" = "#CCEBC5",
+                                "1174-901-12" = "#FFED6F")) ; M_i
+
+#Fig6B
+#Kanuka
+
+data <- Kanuka_Ind_physeq_alln %>%                                         
+  tax_glom(taxrank = "Genus") %>%                     
+  psmelt() %>%                   
+  arrange(-Abundance) 
+  
+data$Host_species <- factor(data$Host_species, levels=c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) #this establishes the x axis order
+
+
+host.labs <- c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")
+names(host.labs) <- c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")
+
+
+K_i <- ggplot(data, aes(x=Transect_point, y = Abundance, fill = Genus)) +
+  
+  geom_bar(stat = "identity", width = 0.8, show.legend = TRUE) +
+  
+  xlab("") +
+  ylab("Relative Abundance \n ") +
+  scale_x_discrete(breaks = unique) +
+  scale_y_continuous(limits = c(0,0.52), expand = c(0,0)) + 
+  theme_classic() +
+  theme(axis.text.x=element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size=10, face = "italic"), legend.title = element_text(size = 10)) +
+  facet_wrap(~ Host_species, ncol =4, scales = 'free', 
+             labeller = labeller(Host_species = host.labs)) + 
+  scale_fill_manual(values = c( "Acidiphilium" = "#8DD3C7",
+                                "Aurantisolimonas" = "#FFFFB3",
+                                "Bryocella" = "#BEBADA",
+                                "Edaphobacter" =  "#FB8072",
+                                "Granulicella" = "#80B1D3",
+                                "LD29" = "#FDB462",
+                                "Methylocella" = "#B3DE69",
+                                "PMMR1" =   "#FCCDE5",
+                                "Sphingomonas" = "#D9D9D9",
+                                "Terriglobus" =  "#BC80BD",
+                                "Unknown" = "#CCEBC5",
+                                "1174-901-12" = "#FFED6F")) ; K_i
+
+
+
+##customising facet grid colour per species
+#devtools::install_github("teunbrand/ggh4x")
+library(ggh4x)
+
+K_i <- ggplot(data, aes(x=Transect_point, y = Abundance, fill = Genus)) +
+  
+  geom_bar(stat = "identity", width = 0.8, show.legend = TRUE) +
+  
+  xlab("") +
+  ylab("Relative Abundance \n ") +
+  scale_x_discrete(breaks = unique) +
+  scale_y_continuous(limits = c(0,0.52), expand = c(0,0)) + 
+  theme_classic() +
+  #theme(axis.text.x=element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size=10, face = "italic"), legend.title = element_text(size = 10)) +
+  
+  facet_wrap2(ncol =4,
+    Host_species ~ ., scales = "free", axes = TRUE,
+    labeller = labeller(Host_species = host.labs),
+    strip = strip_themed(
+      background_x = list(element_rect(fill="white"),
+                          element_rect(fill="lightgrey"),
+                          element_rect(fill="white"),
+                          element_rect(fill="white"))
+                                       
+    )) +
+    scale_fill_manual(values = c("Acidiphilium" = "#8DD3C7",
+                                "Aurantisolimonas" = "#FFFFB3",
+                                "Bryocella" = "#BEBADA",
+                                "Edaphobacter" =  "#FB8072",
+                                "Granulicella" = "#80B1D3",
+                                "LD29" = "#FDB462",
+                                "Methylocella" = "#B3DE69",
+                                "PMMR1" =   "#FCCDE5",
+                                "Sphingomonas" = "#D9D9D9",
+                                "Terriglobus" =  "#BC80BD",
+                                "Unknown" = "#CCEBC5",
+                                "1174-901-12" = "#FFED6F")) ; K_i
+
+
+#Fig6c
+#Tawiniwini
+
+data <- Tawiniwini_Ind_physeq_alln %>%                                         
+  tax_glom(taxrank = "Genus") %>%                     
+  psmelt() %>%                   
+  arrange(-Abundance) 
+  
+data$Host_species <- factor(data$Host_species, levels=c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) #this establishes the x axis order
+
+
+host.labs <- c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")
+names(host.labs) <- c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")
+
+
+Tw_i <- ggplot(data, aes(x=Sample_ID, y = Abundance, fill = Genus)) +
+  
+  geom_bar(stat = "identity", width = 0.8, show.legend = TRUE) +
+  xlab("") +
+  ylab("Relative Abundance \n ") +
+  scale_x_discrete(breaks = unique) +
+  scale_y_continuous(limits = c(0,0.52), expand = c(0,0)) + 
+  theme_classic() +
+  theme(axis.text.x=element_blank()) +
+   theme(legend.position = "none", legend.text = element_text(size=10, face = "italic"),
+        legend.title = element_text(size = 10)) +
+   facet_wrap(~ Host_species, ncol =4, scales = 'free', 
+             labeller = labeller(Host_species = host.labs)) + 
+  scale_fill_manual(values = c( "Acidiphilium" = "#8DD3C7",
+                                "Aurantisolimonas" = "#FFFFB3",
+                                "Bryocella" = "#BEBADA",
+                                "Edaphobacter" =  "#FB8072",
+                                "Granulicella" = "#80B1D3",
+                                "LD29" = "#FDB462",
+                                "Methylocella" = "#B3DE69",
+                                "PMMR1" =   "#FCCDE5",
+                                "Sphingomonas" = "#D9D9D9",
+                                "Terriglobus" =  "#BC80BD",
+                                "Unknown" = "#CCEBC5",
+                                "1174-901-12" = "#FFED6F")) ; Tw_i
+
+
+
+
+##customising facet grid colour per species
+#devtools::install_github("teunbrand/ggh4x")
+library(ggh4x)
+
+
+Tw_i <- ggplot(data, aes(x=Transect_point, y = Abundance, fill = Genus)) +
+  
+  geom_bar(stat = "identity", width = 0.8, show.legend = TRUE) +
+  
+  xlab("") +
+  ylab("Relative Abundance \n ") +
+  scale_x_discrete(breaks = unique) +
+  scale_y_continuous(limits = c(0,0.52), expand = c(0,0)) + 
+  theme_classic() +
+  #theme(axis.text.x=element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size=10, face = "italic"), legend.title = element_text(size = 10)) +
+  
+  facet_wrap2(ncol =4,
+    Host_species ~ ., scales = "free", axes = TRUE,
+    labeller = labeller(Host_species = host.labs),
+    strip = strip_themed(
+      background_x = list(element_rect(fill="white"),
+                          element_rect(fill="white"),
+                          element_rect(fill="lightgrey"),
+                          element_rect(fill="white"))
+                                       
+    )) +
+    scale_fill_manual(values = c("Acidiphilium" = "#8DD3C7",
+                                "Aurantisolimonas" = "#FFFFB3",
+                                "Bryocella" = "#BEBADA",
+                                "Edaphobacter" =  "#FB8072",
+                                "Granulicella" = "#80B1D3",
+                                "LD29" = "#FDB462",
+                                "Methylocella" = "#B3DE69",
+                                "PMMR1" =   "#FCCDE5",
+                                "Sphingomonas" = "#D9D9D9",
+                                "Terriglobus" =  "#BC80BD",
+                                "Unknown" = "#CCEBC5",
+                                "1174-901-12" = "#FFED6F")) ; Tw_i
+
+
+#Fig6d
+#Toatoa
+
+data <- Toatoa_Ind_physeq_alln %>%                                         
+  tax_glom(taxrank = "Genus") %>%                     
+  psmelt() %>%                   
+  arrange(-Abundance) 
+
+
+data$Host_species <- factor(data$Host_species, levels=c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) #this establishes the x axis order
+
+
+host.labs <- c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")
+names(host.labs) <- c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")
+
+  
+To_i <- ggplot(data, aes(x=Sample_ID, y = Abundance, fill = Genus)) +
+  
+  geom_bar(stat = "identity", width = 0.8, show.legend = TRUE) +
+  
+  xlab("") +
+  ylab("Relative Abundance \n ") +
+  scale_x_discrete(breaks = unique) +
+  scale_y_continuous(limits = c(0,0.52), expand = c(0,0)) + 
+  theme_classic() +
+  theme(axis.text.x=element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size=10, face = "italic"), legend.title = element_text(size = 10)) +
+ facet_wrap(~ Host_species, ncol =4, scales = 'free', 
+             labeller = labeller(Host_species = host.labs)) + 
+   scale_fill_manual(values = c("Acidiphilium" = "#8DD3C7",
+                                "Aurantisolimonas" = "#FFFFB3",
+                                "Bryocella" = "#BEBADA",
+                                "Edaphobacter" =  "#FB8072",
+                                "Granulicella" = "#80B1D3",
+                                "LD29" = "#FDB462",
+                                "Methylocella" = "#B3DE69",
+                                "PMMR1" =   "#FCCDE5",
+                                "Sphingomonas" = "#D9D9D9",
+                                "Terriglobus" =  "#BC80BD",
+                                "Unknown" = "#CCEBC5",
+                                "1174-901-12" = "#FFED6F")) ; To_i
+
+
+##customising facet grid colour per species
+#devtools::install_github("teunbrand/ggh4x")
+library(ggh4x)
+
+
+To_i <- ggplot(data, aes(x=Transect_point, y = Abundance, fill = Genus)) +
+  
+  geom_bar(stat = "identity", width = 0.8, show.legend = TRUE) +
+  
+  xlab("Tree") +
+  ylab("Relative Abundance \n ") +
+  scale_x_discrete(breaks = unique) +
+  scale_y_continuous(limits = c(0,0.52), expand = c(0,0)) + 
+  theme_classic() +
+  #theme(axis.text.x=element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size=10, face = "italic"), legend.title = element_text(size = 10)) +
+  
+  facet_wrap2(ncol =4,
+    Host_species ~ ., scales = "free", axes = TRUE,
+    labeller = labeller(Host_species = host.labs),
+    strip = strip_themed(
+      background_x = list(element_rect(fill="white"),
+                          element_rect(fill="white"),
+                          element_rect(fill="white"),
+                          element_rect(fill="lightgrey"))
+                                       
+    )) +
+    scale_fill_manual(values = c("Acidiphilium" = "#8DD3C7",
+                                "Aurantisolimonas" = "#FFFFB3",
+                                "Bryocella" = "#BEBADA",
+                                "Edaphobacter" =  "#FB8072",
+                                "Granulicella" = "#80B1D3",
+                                "LD29" = "#FDB462",
+                                "Methylocella" = "#B3DE69",
+                                "PMMR1" =   "#FCCDE5",
+                                "Sphingomonas" = "#D9D9D9",
+                                "Terriglobus" =  "#BC80BD",
+                                "Unknown" = "#CCEBC5",
+                                "1174-901-12" = "#FFED6F")) ; To_i
+    
+
+#######################################################
+###Generating a legend using a fake combined dataset###
+#######################################################
+
+#merge a list of all for common legend.
+ind_otu <- subset(otu_table(physeq), rownames(otu_table(physeq)) %in% Man_ind_asvs)
+M_physeq <- merge_phyloseq(ind_otu, tax_table(physeq), sample_data(physeq))
+
+m_otu <- otu_table(M_physeq) #using full set data to merge for legend
+k_otu <- otu_table(Kanuka_Ind_physeq)
+tw_otu <- otu_table(Tawiniwini_Ind_physeq)
+to_otu <- otu_table(Toatoa_Ind_physeq)
+
+common <- rbind(to_otu,tw_otu, m_otu, k_otu) 
+common_ind <-row.names(common)
+common_Ind_asvs <- subset(otu_table(L_Rp_physeq_ab), rownames(otu_table(L_Rp_physeq_ab)) %in% common_ind)
+common_Ind_physeq_alln <- merge_phyloseq(common_Ind_asvs, tax_table(L_Rp_physeq_ab), sample_data(L_Rp_physeq_ab)) 
+
+fake_data <- common_Ind_physeq_alln %>%                                         
+  tax_glom(taxrank = "Genus") %>%                     
+  psmelt() %>%                   
+  arrange(-Abundance) 
+
+
+fake_data$Host_species <- factor(fake_data$Host_species, levels=c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) #this establishes the x axis order
+
+
+host.labs <- c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")
+names(host.labs) <- c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")
+
+  
+fake_i <- ggplot(fake_data, aes(x=Sample_ID, y = Abundance, fill = Genus)) +
+  
+  geom_bar(stat = "identity", width = 0.8, show.legend = TRUE) +
+  
+  xlab("") +
+  ylab("Relative Abundance \n ") +
+  scale_x_discrete(breaks = unique) +
+  scale_y_continuous(limits = c(0,1), expand = c(0,0)) + 
+  theme_classic() +
+  theme(axis.text.x=element_blank()) +
+  theme(legend.position = "bottom", legend.text = element_text(size=10, face = "italic"), legend.title = element_text(size = 10)) +
+ facet_wrap(~ Host_species, ncol =4, scales = 'free', 
+             labeller = labeller(Host_species = host.labs)) + 
+   scale_fill_manual(values = c("Acidiphilium" = "#8DD3C7",
+                                "Aurantisolimonas" = "#FFFFB3",
+                                "Bryocella" = "#BEBADA",
+                                "Edaphobacter" =  "#FB8072",
+                                "Granulicella" = "#80B1D3",
+                                "LD29" = "#FDB462",
+                                "Methylocella" = "#B3DE69",
+                                "PMMR1" =   "#FCCDE5",
+                                "Sphingomonas" = "#D9D9D9",
+                                "Terriglobus" =  "#BC80BD",
+                                "Unknown" = "#CCEBC5",
+                                "1174-901-12" = "#FFED6F")) ; fake_i
+
+#extract legend
+leg <- get_legend(fake_i)
+as_ggplot(leg)
+
+ggplot2::ggsave(filename="Fig6_leg.jpeg", plot=leg, width = 15, height = 3, units = c("cm"), dpi = 300)
+
+fig6abcd <- plot_grid(M_i, K_i, Tw_i, To_i, 
+          align = "v",
+          ncol = 1,
+          labels = c('A', 'B', 'C', 'D'), 
+          label_size = 12)
+
+
+ggplot2::ggsave(filename="Fig6.jpeg", plot=fig6abcd, width = 20, height = 23, units = c("cm"), dpi = 300)
+
+```
+

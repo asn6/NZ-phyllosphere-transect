@@ -1,0 +1,773 @@
+---
+title: "occurrence_probabilities"
+author: "Anya"
+date: "2024-08-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+physeq <- readRDS("Rp_physeq.rds")
+
+#transform raw data to relative abundance 
+Rp_physeq_ab <- Rp_physeq %>% transform_sample_counts(function(x) {x/sum(x)} )
+
+#Subset  leaf samples from soil and remove rows(ASVs) with zero sum
+L_Rp_physeq_ab <- subset_samples(Rp_physeq_ab, Type %in% c("Leaf "))
+data <- otu_table(L_Rp_physeq_ab)
+data = data[ rowSums(data)!=0, ] 
+otu_table(L_Rp_physeq_ab) <- otu_table(data, taxa_are_rows = TRUE) 
+
+#create presence/absence dataframe
+otu <- otu_table(L_Rp_physeq_ab)
+otu[otu > 0] <- 1
+L_Rp_physeq_prab <- L_Rp_physeq_ab
+otu_table(L_Rp_physeq_prab) <- otu_table(otu, taxa_are_rows = TRUE)
+
+#Fig3A
+#Predicted probability of all possible colonisation states 0-6 + host preference
+#Settings
+anno_size = unit(3.6, "pt")
+
+# Removing zero (as there are so many)
+prob_df <- data.frame(State = c("1", "2", "3", "4", "5", "6"),
+                   Pe = c( 6/63, 15/63, 20/63, 15/63, 6/63, 1/63))
+
+
+#predicted probabilities of colonisation states per transect point.
+ggplot(data = prob_df,
+       aes(x=State, y=Pe, fill = Pe)) + 
+  geom_bar(stat="identity", position = "stack", color="black") + 
+  scale_y_continuous() +
+  theme_bw() +
+  ylab("Probability") +
+  xlab("Colonisation state") 
+  
+
+#including predicted probabilities for man/non/both pref
+
+S1 <- c(3/63, 0, 3/63)
+S2 <- c(3/63, 9/63, 3/63)
+S3 <- c(10/63, 0, 10/63)
+S4 <- c(3/63, 9/63, 3/63)
+S5 <- c(3/63, 0, 3/63)
+S6 <- c(0, 1/63, 0)
+
+S <- as.data.frame(cbind(S1, S2, S3, S4, S5, S6))
+S$score <- as.factor(c(1, 0, -1))
+
+l_S<- pivot_longer(S, cols = c("S1", "S2", "S3", "S4", 
+                                           "S5", "S6"),
+                    names_to = "State",
+                    values_to = "Pe")
+
+mycols <- c("black", "darkgrey", "#DDAA33") 
+
+pe <- ggplot(data = l_S,
+       aes(x=State, y=Pe, fill = score)) + 
+  geom_bar(stat="identity", position = "stack") + 
+  scale_y_continuous(limits = c(0,0.6), expand = c(0,0)) +
+  scale_x_discrete(labels=c('1', '2', '3', '4', '5', '6')) + 
+  theme_classic() +
+  ylab("Proportion") +
+  xlab("N") +
+  theme(legend.position = "none", 
+        axis.title=element_text(size=9),
+        axis.text=element_text(size=9))+
+        #axis.title.y = element_text(hjust = 0.1)) + 
+  scale_fill_manual(name = "Host",
+                  labels = c('Non-mānuka', 'Both', 'Manuka'),
+                  values = mycols) + 
+    annotate(geom="text", x=4.7, y=0.53, label="predicted",
+              color="grey25", fontface  = "italic", size = anno_size)  ; pe
+
+
+#The proportion of all taxa found in a state + host preferences
+#Make the dataframes
+#Metadata with new variable called Group (Manuka/Non_manuka)
+df <- sample_data(L_Rp_physeq_prab)
+df$Group <- with(df, ifelse(Host_species == "Manuka", "Manuka", "Non_manuka"))
+df[,order(colnames(df))]
+#The sample data that I need is Transect_point, Group
+
+#OTU table: The count of each ASV per sample (i.e. 1)
+otu <- otu_table(L_Rp_physeq_prab) %>%
+  .[,order(colnames(.))] %>%
+  psmelt()
+  colnames(otu)[1] ="ASV"
+  colnames(otu)[2] ="Sample_ID"
+  colnames(otu)[3] ="Count"
+
+#joining metadata and otu counts by Sample_ID, counting the number of times an ASV is present per site (i.e. STATE NUMBER)
+x2 <- inner_join(otu, df, by="Sample_ID") %>%
+  select(ASV, Sample_ID, Count, Tree_ID, Transect_point, Group) %>% #selecting relevent metadata columns
+  group_by(ASV, Transect_point) %>%
+  dplyr::summarize(count = sum(Count), .groups="drop") 
+  x2$Unique_ID <- str_c(x2$ASV, '_', x2$Transect_point) 
+  colnames(x2)[3] = "State"
+  
+##joining metadata and otu counts by Sample_ID, Grouping by transect point AND GROUP to generate MANUKA V NON_MANUKA COUNTS
+x <- inner_join(otu, df, by="Sample_ID") %>%
+  select(ASV, Sample_ID, Count, Tree_ID, Transect_point, Group) %>%
+  group_by(ASV, Transect_point, Group) %>%
+  dplyr::summarize(count = sum(Count), .groups="drop") 
+  x$Unique_ID <- str_c(x$ASV, '_', x$Transect_point) #creating unique ASVID per transect
+  colnames(x)[4] ="Count"
+  
+#a third dataset, similar to x but longer and retaining sample_ids
+x3 <- inner_join(otu, df, by="Sample_ID") %>%
+  select(ASV, Sample_ID, Count, Tree_ID, Transect_point, Group)
+  x3$Unique_ID <- str_c(x3$ASV, '_', x3$Transect_point) #creating unique ASVID per transect.  
+
+#Joining STATE NUMBER (x2) with x3
+j <- x2 %>% select(State, Unique_ID) %>%
+    inner_join(x3, ., by="Unique_ID") %>%
+    select(ASV, Sample_ID, Count, Transect_point, Group, Unique_ID, Group, State) 
+
+#Using MANUKA V NON_MANUKA COUNTS to creat host pref scores
+g <- spread(x, Group, Count)
+t <- x2[,3:4]
+z <- inner_join(g, t, by="Unique_ID") 
+#colnames(z)[7] = "State"
+
+#creating scores per host preference
+z$pref <- (z$Manuka - z$Non_manuka)
+z$score <- z$pref
+z$score[z$pref > 0] <- 1
+z$score[z$pref < 0] <- -1
+
+#Merging the scores with full data set (j)
+u <- z %>% select(Unique_ID, score) %>%  #-1 = nonman pref, 1 = man pref, 0 = mixed
+  merge(j, ., by= "Unique_ID") 
+
+u$score <- as.factor(u$score)
+u <- filter(u, State != '0') 
+#This dataset gives us the occurance (count) of each asv in each sample (i.e. 1) with corresponding state, score and group  
+
+#Subset per site 
+t1 <- filter(u, Transect_point == 'T1') #subsetting
+
+ y1 <- t1 %>% dplyr::group_by(ASV, State, score)  %>% #counting the number of asvs with different host pref's for each state
+      dplyr::summarize(count = sum(Count), .groups="drop") %>%
+      select(ASV, State, score) %>%
+      with(., table(score, State))
+  y1 <- as.data.frame(y1)
+  colnames(y1)[3] = "T1"
+
+#Subset per site 
+t2 <- filter(u, Transect_point == 'T2') 
+
+  y2 <- t2 %>% dplyr::group_by(ASV, State, score)  %>%
+      dplyr::summarize(count = sum(Count), .groups="drop") %>%
+      select(ASV, State, score) %>%
+      with(., table(score, State))
+  y2 <- as.data.frame(y2)
+ colnames(y2)[3] = "T2"
+
+#Subset per site 
+t4 <- filter(u, Transect_point == 'T4') 
+
+y4 <- t4 %>% dplyr::group_by(ASV, State, score)  %>%
+      dplyr::summarize(count = sum(Count), .groups="drop") %>%
+      select(ASV, State, score) %>%
+      with(., table(score, State))
+  y4 <- as.data.frame(y4)
+   colnames(y4)[3] = "T4"
+      
+#Subset per site 
+t5 <- filter(u, Transect_point == 'T5') 
+
+y5 <- t5 %>% dplyr::group_by(ASV, State, score)  %>%
+      dplyr::summarize(count = sum(Count), .groups="drop") %>%
+      select(ASV, State, score) %>%
+      with(., table(score, State))
+  y5 <- as.data.frame(y5)
+       colnames(y5)[3] = "T5"
+
+#Subset per site 
+t6 <- filter(u, Transect_point == 'T6') 
+
+y6 <- t6 %>% dplyr::group_by(ASV, State, score)  %>%
+      dplyr::summarize(count = sum(Count), .groups="drop") %>%
+      select(ASV, State, score) %>%
+      with(., table(score, State))
+  y6 <- as.data.frame(y6)           
+       colnames(y6)[3] = "T6"
+      
+#merging all the site specific numbers together (number of asvs with different host pref's for each state)
+state_y <- merge(y1, y2,  by = c("State", "score")) %>% 
+  merge(., y4, by=c("State", "score")) %>%
+  merge(., y5, by=c("State", "score")) %>%
+  merge(., y6, by=c("State", "score")) # %>%
+
+#Making these numbers into proportions
+h <- state_y[,3:7]/colSums(state_y[,3:7])
+h$State <- state_y$State
+h$score <- state_y$score
+
+#melt out
+L_h<- pivot_longer(h, cols = c("T1", "T2", "T4", "T5", "T6"),
+                    names_to = "T",
+                    values_to = "values")
+
+#get averages
+L_hsum <- L_h %>%
+            dplyr::group_by(State, score) %>%
+            summarise(mean_prop=mean(values))
+
+L_hsum$State = as.factor(L_hsum$State)
+
+
+#https://www.garrickadenbuie.com/blog/custom-discrete-color-scales-for-ggplot2/
+  #observed (po) proportion of host pref asvs per state
+#mycols <- c( "#DDAA33", "#44AA99", "#004488",   "#bb5566") #manuka, kanuka, tawinwini, toatoa
+
+po <- ggplot(data = L_hsum,
+       aes(x=State, y=mean_prop, fill = score)) + 
+  geom_bar(stat="identity", position="stack") + 
+  scale_y_continuous(expand = c(0,0.0), limits=c(0,.6)) +
+  #ylab("Proportion of ASVs") +
+  xlab("N") +
+  theme_classic() + 
+  theme(legend.position = "none", 
+        
+        axis.title=element_text(size=9),
+        axis.text=element_text(size=9),
+        axis.title.y = element_blank(),
+        #axis.title.y = element_text(hjust = 0.1),
+        axis.ticks.y = element_blank(),
+        axis.line.y = element_blank(),
+        axis.text.y = element_blank()
+        ) + 
+      annotate(geom="text", x=4.7, y=0.53, label="observed",
+              color="grey25", fontface  = "italic", size = anno_size)  +
+  scale_fill_manual(name = "Host",
+                  labels = c('Non-mānuka', 'Both', 'Mānuka'),
+                  values = mycols) ;po
+#plotting with pe (generated at top of page)
+
+#plotting with legend to extract legend
+po_l <- ggplot(data = L_hsum,
+       aes(x=State, y=mean_prop, fill = score)) + 
+  geom_bar(stat="identity", position="stack") + 
+  scale_y_continuous(expand = c(0,0.0), limits=c(0,.6)) +
+  ylab("Proportion") +
+  xlab("N") +
+  theme_classic() + 
+  theme( #legend.position = "none") + 
+        axis.title=element_text(size=9),
+        axis.text=element_text(size=9)) + 
+       # axis.title.y = element_text(hjust = 0.1)) + 
+  scale_fill_manual(name = "Host group",
+                  labels = c('Non-mānuka', 'Both', 'Mānuka'),
+                  values = mycols) ;po_l
+
+###plotting###
+Fig3a <- plot_grid(pe, po, 
+               labels = c('', ''), #add label in if saving individually
+               rel_widths = c(1, 0.85),
+               label_size = 12); Fig1ab
+
+ggsave(filename = "Fig3a.png", plot = Fig3a, width = 8.5, height = 4, units = c("cm"))
+
+#Fig3b
+#predicted asv proportions for individual host groups
+
+# Including zero truncation
+prob_df_m <- data.frame(State = c("1", "2", "3"),
+                   Pe = c( 3/7, 3/7, 1/7))
+
+#predicted probabilities of colonisation states per transect point.
+po2 <- ggplot(data = prob_df_m,
+       aes(x=State, y=Pe)) + 
+  geom_bar(stat="identity") + 
+   scale_y_continuous(expand = c(0,0.0), limits=c(0,0.7)) +
+  theme_classic() + 
+  theme(axis.title=element_text(size=9),
+        axis.text=element_text(size=9),
+        axis.title.x = element_text(vjust = 1))+
+        #axis.title.x = element_blank(),
+        #axis.title.y = element_blank()) + 
+    annotate(geom="text", x=2.2, y=0.6, label="predicted",
+              color="grey25", fontface  = "italic", size= anno_size)  +
+  ylab("Proportion") +
+  xlab("N") +
+  theme(legend.position = "none")  + 
+  scale_fill_manual("", values = c("darkgrey", "darkgrey", "darkgrey")) ;po2
+
+
+Transect_point <- dput(sample_data(Manuka_Rp_physeq_prab)$Transect_point)
+Transect_list <- factor(Transect_point)
+
+for(i in levels(Transect_list)) {
+  data <- subset_samples(Manuka_Rp_physeq_prab, Transect_list %in% i)
+  data_otu <- otu_table(data)
+  data_otu = data_otu[ rowSums(data_otu)!=0, ] 
+  otu_table(data) <- otu_table(data_otu, taxa_are_rows = TRUE) 
+  new_name <- paste0(i,"_Manuka_Rp_physeq_prab")
+  assign(new_name, data)
+  }
+
+#T1 empirical colonisation state probabilities - mānuka only 
+p <- otu_table(T1_Manuka_Rp_physeq_prab)
+colnames(p) <- c('Manuka1', 'Manuka2', 'Manuka3')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T1_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T1_state_f)[2] = "T1_count"
+
+T1_state_f[,3] <- T1_state_f[,2]/(colSums(T1_state_f[,2]))
+colnames(T1_state_f)[3] = "T1_prop"
+
+
+#T2 empirical colonisation state probabilities - mānuka only 
+p <- otu_table(T2_Manuka_Rp_physeq_prab)
+colnames(p) <- c('Manuka1', 'Manuka2', 'Manuka3')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T2_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T2_state_f)[2] = "T2_count"
+
+T2_state_f[,3] <- T2_state_f[,2]/(colSums(T2_state_f[,2]))
+colnames(T2_state_f)[3] = "T2_prop"
+
+#T4 empirical colonisation state probabilities - mānuka only 
+p <- otu_table(T4_Manuka_Rp_physeq_prab)
+colnames(p) <- c('Manuka1', 'Manuka2', 'Manuka3')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T4_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T4_state_f)[2] = "T4_count"
+
+T4_state_f[,3] <- T4_state_f[,2]/(colSums(T4_state_f[,2]))
+colnames(T4_state_f)[3] = "T4_prop"
+
+#T5 empirical colonisation state probabilities - mānuka only 
+p <- otu_table(T5_Manuka_Rp_physeq_prab)
+colnames(p) <- c('Manuka1', 'Manuka2', 'Manuka3')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T5_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T5_state_f)[2] = "T5_count"
+
+T5_state_f[,3] <- T5_state_f[,2]/(colSums(T5_state_f[,2]))
+colnames(T5_state_f)[3] = "T5_prop"
+
+#T6 empirical colonisation state probabilities - mānuka only 
+p <- otu_table(T6_Manuka_Rp_physeq_prab)
+colnames(p) <- c('Manuka1', 'Manuka2', 'Manuka3')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T6_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T6_state_f)[2] = "T6_count"
+
+T6_state_f[,3] <- T6_state_f[,2]/(colSums(T6_state_f[,2]))
+colnames(T6_state_f)[3] = "T6_prop"
+
+#merging counts
+state_count <-  merge(T1_state_f, T2_state_f, by= "State") %>%
+  merge(., T4_state_f, by= "State") %>%
+  merge(., T5_state_f, by= "State") %>%
+  merge(., T6_state_f, by="State") %>%
+   merge(., prob_df_m, by="State") %>%
+  select("State", "Pe", "T1_count", "T2_count", "T4_count", "T5_count", "T6_count")
+
+#merging proportions
+state_f <- merge(T1_state_f, T2_state_f, by= "State") %>%
+  merge(., T4_state_f, by= "State") %>%
+  merge(., T5_state_f, by= "State") %>%
+  merge(., T6_state_f, by="State") %>%
+  select("State", "T1_prop", "T2_prop", "T4_prop", "T5_prop", "T6_prop")
+
+
+L_state_f<- pivot_longer(state_f, cols = c("T1_prop", "T2_prop", "T4_prop", 
+                                           "T5_prop", "T6_prop"),
+                    names_to = "Transect",
+                    values_to = "Po")
+
+
+#get averages
+L_state_f$State = as.character(L_state_f$State)
+
+L_state_summ <- L_state_f %>%
+  dplyr::group_by(State) %>%
+  summarise(mean_prop=mean(Po))
+  
+#observed (po) proportion of colonisation states per transect point vs. predicted (pe)
+man_pe <- ggplot(data = L_state_summ,
+       aes(x=State, y=mean_prop, fill = State)) + 
+  geom_bar(stat="identity") + 
+  scale_y_continuous(expand = c(0,0.0), limits=c(0,0.7)) +
+  theme_classic() +
+  theme(axis.title=element_text(size=9),
+        axis.text=element_text(size=9),
+        axis.title.x = element_text(vjust = 1),
+        #axis.title.x = element_blank(),
+        axis.title.y = element_blank(), 
+        axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank(),
+        axis.line.y = element_blank()) + 
+    annotate(geom="text", x=2.6, y=0.6, label="mānuka",
+              color="grey25", fontface  = "italic", size = anno_size)  +
+  ylab("Proportion") +
+  xlab("N") +
+  theme(legend.position = "none")  + 
+  scale_fill_manual("", values = c("#DDAA33", "#DDAA33", "#DDAA33")) ;man_pe
+
+
+Nonman_Rp_physeq_prab <- subset_samples(L_Rp_physeq_prab, Host_species != "Manuka")
+data <- otu_table(Nonman_Rp_physeq_prab)
+data = data[ rowSums(data)!=0, ] 
+otu_table(Nonman_Rp_physeq_prab) <- otu_table(data, taxa_are_rows = TRUE) 
+
+Transect_point <- dput(sample_data(Nonman_Rp_physeq_prab)$Transect_point)
+Transect_list <- factor(Transect_point)
+
+for(i in levels(Transect_list)) {
+  data <- subset_samples(Nonman_Rp_physeq_prab, Transect_list %in% i)
+  data_otu <- otu_table(data)
+  data_otu = data_otu[ rowSums(data_otu)!=0, ] 
+  otu_table(data) <- otu_table(data_otu, taxa_are_rows = TRUE) 
+  new_name <- paste0(i,"_Nonman_Rp_physeq_prab")
+  assign(new_name, data)
+  }
+
+#T1 empirical colonisation state probabilities - nonmanuka only 
+p <- otu_table(T1_Nonman_Rp_physeq_prab)
+colnames(p) <- c('Tawiniwini', 'Toatoa', 'Kanuka')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T1_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T1_state_f)[2] = "T1_count"
+
+T1_state_f[,3] <- T1_state_f[,2]/(colSums(T1_state_f[,2]))
+colnames(T1_state_f)[3] = "T1_prop"
+
+#T2 empirical colonisation state probabilities - nonmanuka only 
+p <- otu_table(T2_Nonman_Rp_physeq_prab)
+colnames(p) <- c('Tawiniwini', 'Toatoa', 'Kanuka')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T2_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T2_state_f)[2] = "T2_count"
+
+T2_state_f[,3] <- T2_state_f[,2]/(colSums(T2_state_f[,2]))
+colnames(T2_state_f)[3] = "T2_prop"
+  
+#T4 empirical colonisation state probabilities - nonmanuka only 
+p <- otu_table(T4_Nonman_Rp_physeq_prab)
+colnames(p) <- c('Toatoa', 'Kanuka', 'Tawiniwini')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T4_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T4_state_f)[2] = "T4_count"
+
+T4_state_f[,3] <- T4_state_f[,2]/(colSums(T4_state_f[,2]))
+colnames(T4_state_f)[3] = "T4_prop"
+
+#T5 empirical colonisation state probabilities - nonmanuka only 
+p <- otu_table(T5_Nonman_Rp_physeq_prab)
+colnames(p) <- c('Toatoa', 'Kanuka', 'Tawiniwini')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T5_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T5_state_f)[2] = "T5_count"
+
+T5_state_f[,3] <- T5_state_f[,2]/(colSums(T5_state_f[,2]))
+colnames(T5_state_f)[3] = "T5_prop"
+
+#T6 empirical colonisation state probabilities - nonmanuka only 
+p <- otu_table(T6_Nonman_Rp_physeq_prab)
+colnames(p) <- c('Tawiniwini', 'Toatoa', 'Kanuka')
+occupancy = as.data.frame(rowSums(p))
+colnames(occupancy)[1] = "State"
+occupancy$group <- occupancy$State
+
+#need to count the occupancy column by group (i.e. value)
+T6_state_f <- occupancy %>% group_by(State) %>%
+  dplyr::summarise(total_count=n(), 
+            .groups= 'drop')
+colnames(T6_state_f)[2] = "T6_count"
+
+T6_state_f[,3] <- T6_state_f[,2]/(colSums(T6_state_f[,2]))
+colnames(T6_state_f)[3] = "T6_prop"
+
+#merging count data
+state_count <-  merge(T1_state_f, T2_state_f, by= "State") %>%
+  merge(., T4_state_f, by= "State") %>%
+  merge(., T5_state_f, by= "State") %>%
+  merge(., T6_state_f, by="State") %>%
+ select("State", "T1_count", "T2_count", "T4_count", "T5_count", "T6_count")
+
+
+#Merging the proportion data
+state_f <- merge(T1_state_f, T2_state_f, by= "State") %>%
+  merge(., T4_state_f, by= "State") %>%
+  merge(., T5_state_f, by= "State") %>%
+  merge(., T6_state_f, by="State") %>%
+  select("State", "T1_prop", "T2_prop", "T4_prop", "T5_prop", "T6_prop")
+
+L_state_f<- pivot_longer(state_f, cols = c("T1_prop", "T2_prop", "T4_prop", 
+                                           "T5_prop", "T6_prop"),
+                    names_to = "Transect",
+                    values_to = "Po")
+
+#get averages
+L_state_f$State = as.factor(L_state_f$State)
+
+L_state_summ <- L_state_f %>%
+  dplyr::group_by(State) %>%
+  summarise(mean_prop=mean(Po))
+  
+#observed (po) proportion of colonisation states per transect point vs. predicted (pe)
+
+non_pe <- ggplot(data = L_state_summ,
+       aes(x=State, y=mean_prop, fill = State)) + 
+  geom_bar(stat="identity") + 
+  scale_y_continuous(expand = c(0,0.0), limits=c(0,0.7)) +
+  scale_y_continuous(expand = c(0,0.0), limits=c(0,0.7)) +
+  theme_classic() +
+  theme(axis.title=element_text(size=9),
+        axis.text=element_text(size=9),
+        axis.title.x = element_text(vjust = 1),
+        #axis.title.x = element_blank(),
+        axis.title.y = element_blank(), 
+        axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank(),
+        axis.line.y = element_blank()) + 
+    annotate(geom="text", x=2.6, y=0.6, label="non-\nmānuka",
+              color="grey25", fontface  = "italic", size = anno_size)  +
+  ylab("Proportion") +
+  xlab("N") +
+  theme(legend.position = "none")  + 
+  scale_fill_manual("", values = c("black", "black", "black")) ; non_pe
+
+###plotting###
+Fig3b <- plot_grid(po2, man_pe, non_pe,
+                     ncol = 3,
+                     align = 'h',
+               labels = c('', '', ''),
+               rel_widths = c(1,0.82,0.82),
+               label_size = 12); Fig3b
+
+ggsave(filename = "Fig3b.png", plot = Fig3b, width = 9, height = 5, units = c("cm"))
+
+##Fig3c
+species <- dput(sample_data(L_Rp_physeq)$Host_species)
+species_list <- factor(species)
+
+for(i in levels(species_list)) {
+  data <- subset_samples(L_Rp_physeq, Host_species %in% i)
+  data_otu <- otu_table(data)
+  data_otu = data_otu[ rowSums(data_otu)!=0, ] 
+  otu_table(data) <- otu_table(data_otu, taxa_are_rows = TRUE) 
+  asvs <- row.names(tax_table(data))
+  new_name <- paste0(i,"_taxa")
+  assign(new_name, asvs)
+  print(new_name)
+}
+
+q <- rownames(otu_table(Toatoa_Rp_physeq))
+r <- rownames(otu_table(Tawiniwini_Rp_physeq))
+f <- rownames(otu_table(Kanuka_Rp_physeq))
+g <- rownames(otu_table(Manuka_Rp_physeq))
+
+p <- as.data.frame(cbind(q,"1"))
+colnames(p)[2] = "Toatoa"
+row.names(p) <- p[,1]
+colnames(p)[1] = "ASVs"
+
+h <- as.data.frame(cbind(r,"1"))
+colnames(h)[2] = "Tawiniwini"
+row.names(h) <- h[,1]
+colnames(h)[1] = "ASVs"
+
+n <- as.data.frame(cbind(f,"1"))
+colnames(n)[2] = "Kānuka"
+row.names(n) <- n[,1]
+colnames(n)[1] = "ASVs"
+
+d <- as.data.frame(cbind(g,"1"))
+colnames(d)[2] = "Mānuka"
+row.names(d) <- d[,1]
+colnames(d)[1] = "ASVs"
+
+merged <- dplyr::full_join(d, n, by = "ASVs") %>%
+          dplyr::full_join(., h, by = "ASVs") %>%
+          dplyr::full_join(., p, by = "ASVs") 
+  row.names(merged) <- merged[,1]
+  m2 <- merged %>% select("Mānuka", "Kānuka", "Toatoa", "Tawiniwini") #%>%
+  #mutate_all(~replace(., !is.na(.), 1)) %>%
+  #mutate_all(~replace(., is.na(.), 0))
+  
+  m2[,1] <- as.numeric(as.character(m2$Mānuka))
+  m2[,2] <- as.numeric(as.character(m2$Kānuka))
+  m2[,3] <- as.numeric(as.character(m2$Toatoa))
+  m2[,4] <- as.numeric(as.character(m2$Tawiniwini))
+  
+  
+  genres = colnames(m2)[1:4]
+
+
+library(ComplexUpset)
+
+size = get_size_mode('exclusive_intersection')
+C <- ComplexUpset::upset(m2, genres, name = 'Plant species', height_ratio=0.4, width_ratio=0.18,
+                         
+        
+        base_annotations = list(
+        'Intersection size'=(intersection_size(
+          
+          width = 0.8,
+          text_mapping=aes(
+                label=paste0(
+                    !!size
+                ),
+                colour=ifelse(!!size > 5000, 'on_bar', 'on_background'),
+                y=ifelse(!!size > 5000, !!size - 10000, !!size)
+          ),
+          
+          
+          
+          counts=T, text = aes(size = 2))
+            + ylab('ASV Count')
+          + ylim(0,1065)
+            + theme(axis.ticks.y=element_line(),
+                    axis.text.y = element_text(size=10),
+                    axis.text.x = element_blank(),
+                    axis.title.y=element_text(size=11))
+        )),
+        
+        
+        set_sizes=(
+        upset_set_size() + 
+          theme_classic() +
+           ylab("Total") +
+          
+          theme(axis.ticks.x=element_blank(),
+                axis.text.x=element_text(size=6, angle=90, vjust = 0.6),
+                axis.title.x = element_text(size = 10),
+                axis.line.y = element_blank(),
+                axis.title.y = element_blank(),
+                axis.text.y = element_blank(),
+                axis.ticks.y = element_blank()) 
+     
+        ),
+
+                                
+        queries = list(
+       
+         upset_query(
+          intersect=c("Mānuka", "Kānuka", "Tawiniwini"),
+          color = "#DDAA33", 
+          fill = "#DDAA33",
+          only_components=c('intersections_matrix', 'Intersection size')
+        ),
+        
+         upset_query(
+          intersect=c("Mānuka", "Toatoa", "Tawiniwini", 
+                      "Kānuka"),
+          color = "#DDAA33", 
+          fill = "#DDAA33",
+          only_components=c('intersections_matrix', 'Intersection size')
+        ),
+          
+        upset_query(
+          intersect=c("Mānuka", "Kānuka"),
+          color = "#DDAA33", 
+          fill = "#DDAA33",
+          only_components=c('intersections_matrix', 'Intersection size')
+        ),
+        
+       upset_query(
+          intersect=c("Mānuka", "Tawiniwini"),
+          color = "#DDAA33", 
+          fill = "#DDAA33",
+          only_components=c('intersections_matrix', 'Intersection size')
+        ),
+       
+       upset_query(
+          intersect=c("Mānuka", "Toatoa"),
+          color = "#DDAA33", 
+          fill = "#DDAA33",
+          only_components=c('intersections_matrix', 'Intersection size')
+        ),
+       
+       upset_query(
+          intersect=c("Mānuka", "Kānuka", "Toatoa"),
+          color = "#DDAA33", 
+          fill = "#DDAA33",
+          only_components=c('intersections_matrix', 'Intersection size')
+        ),
+       
+      
+       upset_query(
+          intersect=c("Mānuka", "Toatoa", "Tawiniwini"),
+          color = "#DDAA33", 
+          fill = "#DDAA33",
+          only_components=c('intersections_matrix', 'Intersection size')
+        )))  
+  
+
+Fig3abc <- plot_grid(Fig3a, Fig3b, C,
+                    ncol = 1,
+                    rel_heights = c(26.5/100,26.5/100,47/100),
+                    labels = c('A', 'B', 'C'),
+                    label_y = 1.03,
+                    label_x = 0.03,
+               label_size = 11); Fig3abc
+
+ggsave(filename = "Fig3abc.png", plot = Fig3abc, width = 9.5, height = 14,
+       units = c("cm"), dpi = 300)
+
+
+```

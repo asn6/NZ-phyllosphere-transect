@@ -1,0 +1,225 @@
+---
+title: "beta_diversity"
+author: "Anya"
+date: "2024-08-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#Setting up the workspace 
+
+#laod packages
+library(ggplot2)
+library(permute)
+library(lattice)
+library(vegan)
+library(dplyr)
+library(magrittr)
+library(scales)
+library(grid)
+library(reshape2)
+library(phyloseq)
+library(randomForest)
+library(knitr)
+library(ggplot2)
+library(tibble)
+library(tidyverse)
+library(vegan)
+library(RColorBrewer)
+library(readr)
+library(ggpubr)
+library(ggthemes)
+library(rstatix)
+
+physeq <- readRDS("Rp_physeq.rds")
+
+#function for calculating mean/sd (used throughout)
+mean.sd <- function(x) c(mean = mean(x), sd = sd(x))
+
+#transform raw data to relative abundance 
+Rp_physeq_ab <- Rp_physeq %>% transform_sample_counts(function(x) {x/sum(x)} )
+
+#Subset  leaf samples from soil and remove rows(ASVs) with zero sum
+L_Rp_physeq_ab <- subset_samples(Rp_physeq_ab, Type %in% c("Leaf "))
+data <- otu_table(L_Rp_physeq_ab)
+data = data[ rowSums(data)!=0, ] 
+otu_table(L_Rp_physeq_ab) <- otu_table(data, taxa_are_rows = TRUE) 
+
+#create presence/absence dataframe
+otu <- otu_table(L_Rp_physeq_ab)
+otu[otu > 0] <- 1
+L_Rp_physeq_prab <- L_Rp_physeq_ab
+otu_table(L_Rp_physeq_prab) <- otu_table(otu, taxa_are_rows = TRUE)
+
+#############################
+###Community dissimilarity###
+#############################
+
+#Fig5ab
+#settings 
+physeq = L_Rp_physeq_ab
+round_value = 2
+lab_size=3
+mycols <- c("#44AA99", "#DDAA33", "#004488",   "#bb5566")
+
+o <- ordinate(physeq = physeq, method = "NMDS", distance = "bray")
+stress_stat <- o$stress %>%
+ signif(., digits = round_value)
+library(glue)
+labs <- c(glue("stress = {stress_stat}"))
+
+set.seed(1)
+nmds1 <- plot_ordination(
+  physeq = L_Rp_physeq_ab, 
+  ordination = ordinate(physeq = L_Rp_physeq_ab, method = "NMDS", distance = "bray"), 
+  color = "Host_species") + 
+  scale_fill_manual(values = mycols) +
+  geom_point(aes(fill=Host_species), colour = "black",pch=21, size=3) +
+  
+  theme_classic() + 
+  theme(legend.position = "none")  +
+  
+  labs(color = "Plant species") +
+  annotate(geom="text", label=labs, size = lab_size,
+           x = 1, y = -0.9, color="black")
+
+#settings 
+physeq = L_Rp_physeq_prab
+round_value = 2
+lab_size=3
+mycols <- c("#44AA99", "#DDAA33", "#004488",   "#bb5566")
+
+o <- ordinate(physeq = physeq, method = "NMDS", distance = "jaccard")
+stress_stat <- o$stress %>%
+ signif(., digits = round_value)
+library(glue)
+labs2 <- c(glue("stress = {stress_stat}"))
+
+set.seed(1)
+nmds2 <- plot_ordination(
+  physeq = L_Rp_physeq_prab, 
+  ordination = ordinate(physeq = L_Rp_physeq_prab, method = "NMDS", 
+                        distance = "jaccard"), 
+  color = "Host_species") +
+  scale_fill_manual(values = mycols) + 
+  geom_point(aes(fill=Host_species), colour = "black",pch=21, size=3) +
+  
+  theme_classic() + 
+  
+  theme(legend.position = "none")  +
+  labs(color = "Plant species") + 
+  annotate(geom="text", label=labs2, size = lab_size,
+           x = 1, y = -0.55, color="black")
+
+#Fig5cd
+#settings
+mycols <- c("#DDAA33","#44AA99" ,"#004488", "#bb5566")
+set.seed(1)
+metadata = as(sample_data(L_Rp_physeq_ab), "data.frame")
+metadata$Host_species <- factor(metadata$Host_species,
+       c("Manuka", "Kanuka", "Tawiniwini", "Toatoa")) #this reorders
+dist <- (phyloseq::distance(L_Rp_physeq_ab, method="bray")) 
+
+disp.spec <- betadisper(dist, metadata$Host_species) #calculate the dispersion (variance) within each tree species
+permutest(disp.spec, pairwise = TRUE, permutations = 999)
+
+df <- data.frame(Distance_to_centroid=disp.spec$distances,
+                 Group=metadata$Host_species)
+groups <- metadata$Host_species
+
+bd_box1 <- ggplot(data=df, aes(x=Group,y=Distance_to_centroid, fill=groups)) +
+  geom_boxplot(outlier.shape=NA) + 
+  scale_x_discrete(labels=c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")) +
+  scale_fill_manual(name = "Plant species", values = mycols, 
+                    labels=c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")) +
+   geom_jitter(size = 2, width=0.2,height=NULL) + 
+   ylab("Variance (Bray-Curtis)") + 
+  xlab("Plant species") + 
+  ylim(0.2,.7) + 
+  theme_classic(base_size = 12) + 
+  theme(legend.position="none")
+ 
+my_comparisons <- list(c ("Kanuka", "Tawiniwini"),
+                       c ("Manuka", "Tawiniwini"),
+                       c ("Kanuka", "Toatoa"),
+                       c("Manuka", "Toatoa"))
+
+bd_boxst1 <- bd_box1 + stat_compare_means(label.y = 0.2, label.x = 3, aes(label = sprintf("Betadisper, p = 0.001", as.numeric(..p.format..))), method = "anova") + 
+            stat_compare_means(comparisons = my_comparisons,
+                                #symnum.args = list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), 
+                                 #                  symbols = c("***", "**", "*", "ns", "ns")),
+                               
+                              label = "p.signif", method = "t.test",  
+                              label.y = c(.54, .58, .63, .67))  
+                               
+set.seed(1)
+dist <- (phyloseq::distance(L_Rp_physeq_prab, method="jaccard")) 
+disp.spec <- betadisper(dist, metadata$Host_species) #calculate the dispersion (variance) within each tree species
+
+df <- data.frame(Distance_to_centroid=disp.spec$distances,
+                 Group=metadata$Host_species)
+groups <- metadata$Host_species
+
+bd_box2 <- ggplot(data=df, aes(x=Group,y=Distance_to_centroid, fill=groups)) +
+  geom_boxplot(outlier.shape=NA) + 
+  scale_x_discrete(labels=c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")) +
+  scale_fill_manual(name = "Plant species", values = mycols, 
+                    labels=c("Mānuka", "Kānuka", "Tawiniwini", "Toatoa")) +
+   geom_jitter(size = 2, width=0.2,height=NULL) + 
+   ylab("Variance (Jaccard)") + 
+  xlab("Plant species") + 
+  ylim(0.2,.7) + 
+  theme_classic(base_size = 12) + 
+  theme(legend.position="none") 
+
+my_comparisons2 <- list(c ("Manuka", "Kanuka"), 
+                        c ("Manuka", "Tawiniwini"),
+                        c ("Kanuka", "Toatoa"),
+                        c("Manuka", "Toatoa"))
+
+bd_boxst2 <- bd_box2 + stat_compare_means(label.y = 0.2, label.x = 3, aes(label = sprintf("Betadisper, p = 0.001", as.numeric(..p.format..))), method = "anova") + 
+            stat_compare_means(comparisons = my_comparisons2,
+                                symnum.args = list(cutpoints = c(0, 0.001, 0.01, 0.02, 0.05, Inf), 
+                                                   symbols = c("***", "***", "**", "*", "ns")),
+                               
+                              label = "p.signif", method = "t.test",  
+                              label.y = c(.5, .55, .61, .65))  
+                               
+###plotting Fig5abcd ###
+fiveabcd <- plot_grid(nmds1, nmds2,  
+                bd_boxst1, bd_boxst2,
+                  labels = c('A', 'B', 'C', 'D'), 
+                rel_heights = c(1,1),
+                rel_widths = c(1,1),
+                  label_size = 12); fiveabcd
+
+ggsave(filename = "Fig5abcd.png", plot = fiveabcd, width = 21, height = 16, units = c("cm"), dpi = 300)
+
+############
+###ANOSIM###
+############
+otu <- t(otu_table(L_Rp_physeq_ab))
+metadata = as(sample_data(L_Rp_physeq_ab), "data.frame")
+anosim(otu, metadata$Host_species, distance = "bray", permutations = 999)
+
+otu <- t(otu_table(L_Rp_physeq_prab))
+metadata = as(sample_data(L_Rp_physeq_prab), "data.frame")
+anosim(otu, metadata$Host_species, distance = "jaccard", permutations = 999)
+
+############
+###ADONIS###
+############
+metadata = as(sample_data(L_Rp_physeq_ab), "data.frame")
+dist <- (distance(L_Rp_physeq_ab, method="bray")) 
+adonis(dist ~ Host_species, data = metadata, permutations = 999) 
+
+metadata = as(sample_data(L_Rp_physeq_prab), "data.frame")
+dist <- (distance(L_Rp_physeq_ab, method="jaccard")) 
+adonis(dist ~ Host_species, data = metadata, permutations = 999) 
+
+```
+

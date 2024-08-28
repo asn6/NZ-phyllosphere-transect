@@ -1,0 +1,775 @@
+---
+title: "distance_decays"
+author: "Anya"
+date: "2024-08-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#Setting up the workspace 
+
+#laod packages
+library(ggplot2)
+library(permute)
+library(lattice)
+library(vegan)
+library(dplyr)
+library(magrittr)
+library(scales)
+library(grid)
+library(reshape2)
+library(phyloseq)
+library(randomForest)
+library(knitr)
+library(ggplot2)
+library(tibble)
+library(tidyverse)
+library(vegan)
+library(RColorBrewer)
+library(readr)
+library(ggpubr)
+library(ggthemes)
+library(rstatix)
+library(measurements)
+library(geodist)
+library(cowplot)
+
+physeq <- readRDS("Rp_physeq.rds") #community data
+#transform raw data to relative abundance 
+Rp_physeq_ab <- Rp_physeq %>% transform_sample_counts(function(x) {x/sum(x)} )
+
+#Subset  leaf samples from soil and remove rows(ASVs) with zero sum
+L_Rp_physeq_ab <- subset_samples(Rp_physeq_ab, Type %in% c("Leaf "))
+data <- otu_table(L_Rp_physeq_ab)
+data = data[ rowSums(data)!=0, ] 
+otu_table(L_Rp_physeq_ab) <- otu_table(data, taxa_are_rows = TRUE) 
+
+#create presence/absence dataframe
+otu <- otu_table(L_Rp_physeq_ab)
+otu[otu > 0] <- 1
+L_Rp_physeq_prab <- L_Rp_physeq_ab
+otu_table(L_Rp_physeq_prab) <- otu_table(otu, taxa_are_rows = TRUE)
+
+#Subset leaf phyloseq into individual host species
+species <- dput(sample_data(L_Rp_physeq_ab)$Host_species)
+species_list <- factor(species)
+
+#host species subsets - relative abundance
+for(i in levels(species_list)) {
+  data <- subset_samples(L_Rp_physeq_ab, Host_species %in% i)
+  data_otu <- otu_table(data)
+  data_otu = data_otu[ rowSums(data_otu)!=0, ] 
+  otu_table(data) <- otu_table(data_otu, taxa_are_rows = TRUE) 
+  new_name <- paste0(i,"_Rp_physeq_ab")
+  assign(new_name, data)
+  print(new_name)
+}
+
+#host species subsets - presence/absence
+for(i in levels(species_list)) {
+  data <- subset_samples(L_Rp_physeq_prab, Host_species %in% i)
+  data_otu <- otu_table(data)
+  data_otu = data_otu[ rowSums(data_otu)!=0, ] 
+  otu_table(data) <- otu_table(data_otu, taxa_are_rows = TRUE) 
+  new_name <- paste0(i,"_Rp_physeq_prab")
+  assign(new_name, data)
+  print(new_name)
+}
+
+Rp_distances <- read.table(file='Rp_distances.txt')
+
+#tidying dataframe 
+rownames(Rp_distances) <- Rp_distances$V1
+Rp_distances$V2 <- paste(Rp_distances$V2, Rp_distances$V3)
+Rp_distances$V3 <- paste(Rp_distances$V4, Rp_distances$V5)
+Rp_distances = select(Rp_distances, -c(V4, V5))
+long <- conv_unit(Rp_distances$V2, from = "deg_dec_min", to = "dec_deg")
+lat <- conv_unit(Rp_distances$V3, from = "deg_dec_min", to = "dec_deg")
+Rp_distances$long <- as.numeric(long )
+Rp_distances$lat <- as.numeric(lat)
+
+Rp_distances = select(Rp_distances, -c(V1, V2, V3)) 
+dist <- as.matrix(geodist(Rp_distances))
+#sorting sample names
+Sample_ID <- as.vector(rownames(Rp_distances))
+colnames(dist) <- Sample_ID
+rownames(dist) <- Sample_ID
+
+dist2 <- as_tibble(dist, rownames = "A") %>%
+  pivot_longer(-A, names_to = "B", values_to= "distance_m")
+
+#remove same sample comparisons (i.e. 0 distances)
+ dist2[dist2==0] <- NA
+ dist2<-dist2[complete.cases(dist2),]
+ #log the distances
+ dist2[,3] <- log10(dist2[,3])
+
+#Fig7a
+set.seed(1)
+data <- t(otu_table(L_Rp_physeq_ab)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, dist2, by=c("A", "B")) 
+
+ddc1 <- combined %>% 
+  filter(A < B) %>% 
+  ggplot(aes(x=distance_m, y = bray)) + 
+  geom_point(size = 2.5, alpha = 0.5, colour = "black") +
+  geom_smooth(method='lm', se = FALSE, color = "black", size = 2) +
+  xlab("Geographical distance (log10)") +
+  ylab("Bray-Curtis dissimilarity") +
+  theme_classic()+
+  theme(
+        panel.border = element_rect(colour = NA, fill=NA),
+        #panel.background = element_rect(fill=NA),
+        #plot.background = element_rect(fill=NA),
+        axis.line.x.bottom=element_line(color="black"),
+        axis.line.x.top=element_line(color="black"),
+        #axis.line.x.top=element_blank(),
+        #axis.line.y.right =element_blank(),
+        axis.line.y = element_line(color="black"),
+        axis.text = element_text(colour = "black", size = 13),
+        text = element_text(colour = "black", size = 13),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(), 
+        axis.ticks = element_line(color="black"))
+
+#Fig7b
+data = filter_taxa(Manuka_Rp_physeq_ab, function(x) mean(x) > 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, dist2, by=c("A", "B")) 
+
+ddc2 <- combined %>% 
+  filter(A < B) %>% 
+  ggplot(aes(x=distance_m, y = bray)) + 
+  geom_point(size = 2.5, alpha = 0.5) +
+  geom_smooth(method='lm', se = FALSE) +
+  xlab("Geographical distance (Log10)") +
+  ylab("Bray-Curtis dissimilarity") +
+  theme_classic() + 
+  theme(panel.border = element_rect(colour = "black", fill=NA)) + 
+  annotate(geom="text", x=1.4, y=0.46, label="Mānuka Mr=0.39, p <0.001",
+              color="black"); ddc2
+#Fig7c
+set.seed(1)
+data = filter_taxa(Tawiniwini_Rp_physeq_ab, function(x) mean(x) > 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, dist2, by=c("A", "B")) 
+
+ddc3 <- combined %>% 
+  filter(A < B) %>% 
+  ggplot(aes(x=distance_m, y = bray)) + 
+  geom_point(size = 5, alpha = 0.5) +
+  geom_smooth(method='lm', se = FALSE) +
+  xlab("Geographical distance (Log10)") +
+  ylab("Bray-Curtis dissimilarity") +
+   theme_classic() + 
+  theme(panel.border = element_rect(colour = "black", fill=NA)) + 
+  annotate(geom="text", x=1.5, y=0.65, label="Tawiniwini Mr=0.68, p <0.01",
+              color="black"); ddc3
+#Fig7d
+set.seed(1)
+data = filter_taxa(Toatoa_Rp_physeq_ab, function(x) mean(x) > 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, dist2, by=c("A", "B")) 
+
+ddc4 <- combined %>% 
+  filter(A < B) %>% 
+  ggplot(aes(x=distance_m, y = bray)) + 
+  geom_point(size = 5, alpha = 0.5) +
+  geom_smooth(method='lm', se = FALSE) +
+  xlab("Geographical distance (Log10)") +
+  ylab("Bray-Curtis dissimilarity") +
+   theme_classic() + 
+  theme(panel.border = element_rect(colour = "black", fill=NA)) + 
+  scale_y_continuous(labels=scaleFUN) +
+  annotate(geom="text", x=1.5, y=0.85, label="Toatoa Mr=0.80, p <0.05",
+              color="black"); ddc4
+
+
+Fig7a <- plot_grid(ddc1, ncol = 1,
+          labels = c('A'),
+          label_size = 12)
+
+ggsave(filename = "Fig7a.png", plot = Fig7a, width = 12, height = 12, units = c("cm"))
+
+Fig7bcd <- plot_grid(ddc2, ddc3, ddc4,
+          ncol = 1,
+          labels = c('B', 'C', 'D'), 
+          label_size = 12)
+
+ggplot2::ggsave(filename="Fig7bcd.png", plot=fig7bcd, device="png", width = 7, height = 12, units = c("cm"), dpi = 300)
+
+##################
+###mantel tests###
+##################
+
+#Converting the distance(m) matrix into euclidean distances
+eucl_dist <- vegdist(dist, method="euclidean") %>%
+    as.matrix() %>%
+    log10() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "distance_e")
+
+##########Bray of all samples, entire community#############
+set.seed(1)
+data <- t(otu_table(L_Rp_physeq_ab)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+ 
+##########Jaccard of all samples, presence/absence, entire community#############
+set.seed(1)
+data <- t(otu_table(L_Rp_physeq_prab)) %>%
+    vegdist(method="jaccard") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")    
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+##########Bray of all samples, low abundance############# 
+set.seed(1)
+data = filter_taxa(L_Rp_physeq_ab, function(x) mean(x) < 0.001, TRUE) #4495 taxa
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+##########Bray of all samples, high abundance############# 
+set.seed(1)
+data = filter_taxa(L_Rp_physeq_ab, function(x) mean(x) > 0.001, TRUE) #270 taxa
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+########Bray curtis of manuka, entire community#########
+set.seed(1)
+data <- t(otu_table(Manuka_Rp_physeq_ab)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+########Jaccard of manuka, presab entire community#########
+set.seed(1)
+data <- t(otu_table(Manuka_Rp_physeq_prab)) %>%
+    vegdist(method="jaccard") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+#########Bray of manuka samples, low abundance########
+set.seed(1)
+data = filter_taxa(Manuka_Rp_physeq_ab, function(x) mean(x) < 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+######Bray of manuka, high abundance#######
+set.seed(1)
+data = filter_taxa(Manuka_Rp_physeq_ab, function(x) mean(x) > 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+########Bray curtis of kanuka, entire community#########
+set.seed(1)
+data <- t(otu_table(Kanuka_Rp_physeq_ab)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+########Jaccard of kanuka, entire community#########
+set.seed(1)
+data <- t(otu_table(Kanuka_Rp_physeq_prab)) %>%
+    vegdist(method="jaccard") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+#########Bray of kanuka samples, low abundance########
+set.seed(1)
+data = filter_taxa(Kanuka_Rp_physeq_ab, function(x) mean(x) < 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+######Bray of kanuka, high abundance#######
+set.seed(1)
+data = filter_taxa(Kanuka_Rp_physeq_ab, function(x) mean(x) > 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+########Bray curtis of Toatoa, entire community#########
+set.seed(1)
+data <- t(otu_table(Toatoa_Rp_physeq_ab)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+########Jaccard of Toatoa, presab entire community#########
+set.seed(1)
+data <- t(otu_table(Toatoa_Rp_physeq_prab)) %>%
+    vegdist(method="jaccard") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+#########Bray of Toatoa samples, low abundance########
+set.seed(1)
+data = filter_taxa(Toatoa_Rp_physeq_ab, function(x) mean(x) < 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+######Bray of Toatoa, high abundance#######
+set.seed(1)
+data = filter_taxa(Toatoa_Rp_physeq_ab, function(x) mean(x) > 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+########Bray curtis of Tawiniwini, entire community#########
+set.seed(1)
+data <- t(otu_table(Tawiniwini_Rp_physeq_ab)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+########Jaccard of Tawiniwini, entire community#########
+set.seed(1)
+data <- t(otu_table(Tawiniwini_Rp_physeq_prab)) %>%
+    vegdist(method="jaccard") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+#########Bray of Tawiniwini samples, low abundance########
+set.seed(1)
+data = filter_taxa(Tawiniwini_Rp_physeq_ab, function(x) mean(x) < 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+######Bray of Tawiniwini, high abundance#######
+set.seed(1)
+data = filter_taxa(Tawiniwini_Rp_physeq_ab, function(x) mean(x) > 0.001, TRUE)
+
+data <- t(otu_table(data)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+
+```
+
+```{r}
+#Converting the distance(m) matrix into euclidean distances
+eucl_dist <- vegdist(dist, method="euclidean") %>%
+    as.matrix() %>%
+    log10() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "distance_e")
+
+##########Bray of all samples, entire community#############
+set.seed(1)
+data <- t(otu_table(L_Rp_physeq_ab)) %>%
+    vegdist(method="bray") %>%
+    as.matrix() %>%
+    as_tibble(rownames = "A") %>%
+    pivot_longer(-A, names_to = "B", values_to = "bray")
+
+combined <- inner_join(data, eucl_dist, by=c("A", "B")) 
+
+bray.dist <- combined %>% 
+  select(A, B, bray) %>%
+  pivot_wider(names_from = B, values_from = bray) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+distance.dist <- combined %>% 
+  select(A, B, distance_e) %>%
+  pivot_wider(names_from = B, values_from = distance_e) %>%
+  column_to_rownames("A") %>% 
+  as.dist() #mantel test needs distance matrix (not just a matrix)
+
+mantel(bray.dist, distance.dist, method = "spearman")
+ 
+```
+
+
+
+
